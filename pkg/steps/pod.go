@@ -17,12 +17,17 @@ import (
 	"github.com/openshift/ci-operator/pkg/junit"
 )
 
+const testSecretName = "test-secret"
+const testSecretDefaultPath = "/usr/test-secrets"
+
 type PodStepConfiguration struct {
 	As                 string
 	From               api.ImageStreamTagReference
 	Commands           string
 	ArtifactDir        string
 	ServiceAccountName string
+	SecretName         string
+	SecretMountPath    string
 }
 
 type podStep struct {
@@ -44,44 +49,9 @@ func (s *podStep) Inputs(ctx context.Context, dry bool) (api.InputDefinition, er
 func (s *podStep) Run(ctx context.Context, dry bool) error {
 	log.Printf("Executing %s %s", s.name, s.config.As)
 
-	containerResources, err := resourcesFor(s.resources.RequirementsForStep(s.config.As))
+	pod, err := s.getPodObject()
 	if err != nil {
-		return fmt.Errorf("unable to calculate %s pod resources for %s: %s", s.name, s.config.As, err)
-	}
-
-	if len(s.config.From.Namespace) > 0 {
-		return fmt.Errorf("pod step does not supported an image stream tag reference outside the namespace")
-	}
-	image := fmt.Sprintf("%s:%s", s.config.From.Name, s.config.From.Tag)
-
-	pod := &coreapi.Pod{
-		ObjectMeta: meta.ObjectMeta{
-			Name: s.config.As,
-			Labels: trimLabels(map[string]string{
-				PersistsLabel:    "false",
-				JobLabel:         s.jobSpec.Job,
-				BuildIdLabel:     s.jobSpec.BuildId,
-				ProwJobIdLabel:   s.jobSpec.ProwJobID,
-				CreatedByCILabel: "true",
-			}),
-			Annotations: map[string]string{
-				JobSpecAnnotation:                     s.jobSpec.RawSpec(),
-				annotationContainersForSubTestResults: s.name,
-			},
-		},
-		Spec: coreapi.PodSpec{
-			ServiceAccountName: s.config.ServiceAccountName,
-			RestartPolicy:      coreapi.RestartPolicyNever,
-			Containers: []coreapi.Container{
-				{
-					Name:                     s.name,
-					Image:                    image,
-					Command:                  []string{"/bin/sh", "-c", "#!/bin/sh\nset -eu\n" + s.config.Commands},
-					Resources:                containerResources,
-					TerminationMessagePolicy: coreapi.TerminationMessageFallbackToLogsOnError,
-				},
-			},
-		},
+		return err
 	}
 
 	// when the test container terminates and artifact directory has been set, grab everything under the directory
@@ -176,10 +146,12 @@ func TestStep(config api.TestStepConfiguration, resources api.ResourceConfigurat
 	return PodStep(
 		"test",
 		PodStepConfiguration{
-			As:          config.As,
-			From:        api.ImageStreamTagReference{Name: api.PipelineImageStream, Tag: string(config.ContainerTestConfiguration.From)},
-			Commands:    config.Commands,
-			ArtifactDir: config.ArtifactDir,
+			As:              config.As,
+			From:            api.ImageStreamTagReference{Name: api.PipelineImageStream, Tag: string(config.ContainerTestConfiguration.From)},
+			Commands:        config.Commands,
+			ArtifactDir:     config.ArtifactDir,
+			SecretName:      config.Secret.Name,
+			SecretMountPath: config.Secret.MountPath,
 		},
 		resources,
 		podClient,
@@ -196,5 +168,80 @@ func PodStep(name string, config PodStepConfiguration, resources api.ResourceCon
 		podClient:   podClient,
 		artifactDir: artifactDir,
 		jobSpec:     jobSpec,
+	}
+}
+
+func (s *podStep) getPodObject() (*coreapi.Pod, error) {
+	image := fmt.Sprintf("%s:%s", s.config.From.Name, s.config.From.Tag)
+	containerResources, err := resourcesFor(s.resources.RequirementsForStep(s.config.As))
+	if err != nil {
+		return nil, fmt.Errorf("unable to calculate %s pod resources for %s: %s", s.name, s.config.As, err)
+	}
+
+	if len(s.config.From.Namespace) > 0 {
+		return nil, fmt.Errorf("pod step does not supported an image stream tag reference outside the namespace")
+	}
+
+	pod := &coreapi.Pod{
+		ObjectMeta: meta.ObjectMeta{
+			Name: s.config.As,
+			Labels: trimLabels(map[string]string{
+				PersistsLabel:    "false",
+				JobLabel:         s.jobSpec.Job,
+				BuildIdLabel:     s.jobSpec.BuildId,
+				ProwJobIdLabel:   s.jobSpec.ProwJobID,
+				CreatedByCILabel: "true",
+			}),
+			Annotations: map[string]string{
+				JobSpecAnnotation:                     s.jobSpec.RawSpec(),
+				annotationContainersForSubTestResults: s.name,
+			},
+		},
+		Spec: coreapi.PodSpec{
+			ServiceAccountName: s.config.ServiceAccountName,
+			RestartPolicy:      coreapi.RestartPolicyNever,
+			Containers: []coreapi.Container{
+				{
+					Name:                     s.name,
+					Image:                    image,
+					Command:                  []string{"/bin/sh", "-c", "#!/bin/sh\nset -eu\n" + s.config.Commands},
+					Resources:                containerResources,
+					TerminationMessagePolicy: coreapi.TerminationMessageFallbackToLogsOnError,
+				},
+			},
+		},
+	}
+
+	if s.config.SecretName != "" {
+		pod.Spec.Containers[0].VolumeMounts = secretVolumeMountFromConfig(s.config.SecretMountPath)
+		pod.Spec.Volumes = secretVolumeFromConfig(s.config.SecretName)
+	}
+	return pod, nil
+}
+
+func secretVolumeFromConfig(secretName string) []coreapi.Volume {
+	return []coreapi.Volume{
+		{
+			Name: testSecretName,
+			VolumeSource: coreapi.VolumeSource{
+				Secret: &coreapi.SecretVolumeSource{
+					SecretName: secretName,
+				},
+			},
+		},
+	}
+}
+
+func secretVolumeMountFromConfig(secretMountPath string) []coreapi.VolumeMount {
+	if secretMountPath == "" {
+		secretMountPath = testSecretDefaultPath
+	}
+	return []coreapi.VolumeMount{
+		{
+			Name:      testSecretName,
+			ReadOnly:  true,
+			MountPath: secretMountPath,
+			SubPath:   filepath.Base(secretMountPath),
+		},
 	}
 }

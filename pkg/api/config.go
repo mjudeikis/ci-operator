@@ -4,10 +4,12 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"path/filepath"
 	"regexp"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/kubernetes/pkg/apis/core/validation"
 )
 
 var originReleaseTagRegexp = regexp.MustCompile(`^origin-v\d+\.\d+$`)
@@ -104,6 +106,19 @@ func validateTestStepConfiguration(fieldRoot string, input []TestStepConfigurati
 
 		if len(test.Commands) == 0 {
 			validationErrors = append(validationErrors, fmt.Errorf("%s[%d].commands: is required", fieldRoot, num))
+		}
+
+		if len(test.Secret.Name) > 0 {
+			nameFn := validation.ValidateNameFunc(validation.ValidateSecretName)
+			if msg := nameFn(test.Secret.Name, false); len(msg) > 0 {
+				validationErrors = append(validationErrors, fmt.Errorf("%s[%d].name: '%s' secret name is not valid value. Error: %v", fieldRoot, num, test.Secret.Name, msg))
+			}
+			// validate path only if name is passed
+			if test.Secret.MountPath != "" {
+				if ok := filepath.IsAbs(test.Secret.MountPath); !ok {
+					validationErrors = append(validationErrors, fmt.Errorf("%s[%d].path: '%s' secret mount path is not valid value, should be ^((\\/*)\\w+)+", fieldRoot, num, test.Secret.MountPath))
+				}
+			}
 		}
 
 		validationErrors = append(validationErrors, validateTestConfigurationType(fmt.Sprintf("%s[%d]", fieldRoot, num), test, release)...)
