@@ -63,6 +63,8 @@ func (s *podStep) Run(ctx context.Context, dry bool) error {
 	if err != nil {
 		return err
 	}
+	pod.Spec.Containers[0].Image = image
+	pod.Spec.Containers[0].Resources = containerResources
 
 	// when the test container terminates and artifact directory has been set, grab everything under the directory
 	var notifier ContainerNotifier = NopNotifier
