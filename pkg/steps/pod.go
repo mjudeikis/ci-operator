@@ -49,6 +49,16 @@ func (s *podStep) Inputs(ctx context.Context, dry bool) (api.InputDefinition, er
 func (s *podStep) Run(ctx context.Context, dry bool) error {
 	log.Printf("Executing %s %s", s.name, s.config.As)
 
+	containerResources, err := resourcesFor(s.resources.RequirementsForStep(s.config.As))
+	if err != nil {
+		return nil, fmt.Errorf("unable to calculate %s pod resources for %s: %s", s.name, s.config.As, err)
+	}
+
+	if len(s.config.From.Namespace) > 0 {
+		return nil, fmt.Errorf("pod step does not supported an image stream tag reference outside the namespace")
+	}
+	image := fmt.Sprintf("%s:%s", s.config.From.Name, s.config.From.Tag)
+
 	pod, err := s.getPodObject()
 	if err != nil {
 		return err
@@ -172,16 +182,6 @@ func PodStep(name string, config PodStepConfiguration, resources api.ResourceCon
 }
 
 func (s *podStep) getPodObject() (*coreapi.Pod, error) {
-	image := fmt.Sprintf("%s:%s", s.config.From.Name, s.config.From.Tag)
-	containerResources, err := resourcesFor(s.resources.RequirementsForStep(s.config.As))
-	if err != nil {
-		return nil, fmt.Errorf("unable to calculate %s pod resources for %s: %s", s.name, s.config.As, err)
-	}
-
-	if len(s.config.From.Namespace) > 0 {
-		return nil, fmt.Errorf("pod step does not supported an image stream tag reference outside the namespace")
-	}
-
 	pod := &coreapi.Pod{
 		ObjectMeta: meta.ObjectMeta{
 			Name: s.config.As,
@@ -203,9 +203,7 @@ func (s *podStep) getPodObject() (*coreapi.Pod, error) {
 			Containers: []coreapi.Container{
 				{
 					Name:                     s.name,
-					Image:                    image,
 					Command:                  []string{"/bin/sh", "-c", "#!/bin/sh\nset -eu\n" + s.config.Commands},
-					Resources:                containerResources,
 					TerminationMessagePolicy: coreapi.TerminationMessageFallbackToLogsOnError,
 				},
 			},
