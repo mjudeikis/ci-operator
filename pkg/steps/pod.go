@@ -51,11 +51,11 @@ func (s *podStep) Run(ctx context.Context, dry bool) error {
 
 	containerResources, err := resourcesFor(s.resources.RequirementsForStep(s.config.As))
 	if err != nil {
-		return nil, fmt.Errorf("unable to calculate %s pod resources for %s: %s", s.name, s.config.As, err)
+		return fmt.Errorf("unable to calculate %s pod resources for %s: %s", s.name, s.config.As, err)
 	}
 
 	if len(s.config.From.Namespace) > 0 {
-		return nil, fmt.Errorf("pod step does not supported an image stream tag reference outside the namespace")
+		return fmt.Errorf("pod step does not supported an image stream tag reference outside the namespace")
 	}
 	image := fmt.Sprintf("%s:%s", s.config.From.Name, s.config.From.Tag)
 
